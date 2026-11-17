@@ -61,7 +61,7 @@ the launcher is still waiting asks whether to cancel the job.
 The script is a single file. Put it somewhere on `PATH`:
 
 ```bash
-git clone https://github.com/<owner>/launch_jupyter.git /opt/launch_jupyter
+git clone https://github.com/josephwkania/launch_jupyter.git /opt/launch_jupyter
 ln -s /opt/launch_jupyter/launch_jupyter /usr/local/bin/launch_jupyter
 ```
 

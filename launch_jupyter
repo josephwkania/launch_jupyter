@@ -15,7 +15,7 @@
 #   launch_jupyter [options]     submit, wait, and print connection details
 #   sbatch launch_jupyter        plain batch job; details are in jupyter-<jobid>.log
 #
-# Copyright (C) 2025-2026 the launch_jupyter authors
+# Copyright (C) 2025-2026 Joseph Kania
 # Originally based on https://github.com/devanshkv/bowser_slurm_tutorial (GPL-3.0)
 #
 # This program is free software: you can redistribute it and/or modify it

@@ -28,6 +28,10 @@ launch_jupyter [options] [-- extra sbatch options]
   -p, --partition LIST  Slurm partition(s)            (default jupyter,main)
   -M, --module NAME     Module to load if jupyter-lab is not on PATH
   -w, --wait SECONDS    How long to wait for Jupyter to start (default 600)
+  -i, --idle-timeout MIN
+                        End the session after MIN idle minutes (default 0 = off)
+  -l, --list            Show your running sessions and how to connect to them
+      --vscode          Hold a node for VS Code Remote-SSH (see below)
   -h, --help            Show help
 ```
 
@@ -88,6 +92,14 @@ everything is enforced by Slurm; the script works the same either way.
 **Stopping.** Run `scancel <jobid>` when you are done. Pressing Ctrl-C while
 the launcher is still waiting asks whether to cancel the job.
 
+**Lost the URL?** `launch_jupyter --list` shows your running sessions with
+their tunnel command and URL (or node, for VS Code).
+
+**Idle shutdown (off by default).** With `-i 60`, Jupyter culls idle kernels
+and terminals and then shuts down after 60 minutes with no activity, which
+ends the job and frees the node. Sites can set a default with
+`LJ_IDLE_TIMEOUT`; `-i 0` turns it off.
+
 ## Installation
 
 The script is a single file. Put it somewhere on `PATH`:
@@ -116,6 +128,7 @@ See [`config.example.sh`](config.example.sh). The most useful settings:
 | `LJ_CPUS`, `LJ_MEM`, `LJ_TIME` | Default resources | `8`, `64G`, `12:00:00` |
 | `LJ_SSH_HOST_PATTERN` | Host pattern in the printed `~/.ssh/config` (VS Code mode) | the node name |
 | `LJ_MODULEPATH`, `LJ_MODULE` | Module to load when `jupyter-lab` is not on `PATH` | none |
+| `LJ_IDLE_TIMEOUT` | Minutes of inactivity before Jupyter shuts down (0 = off) | `0` |
 | `LJ_LOG_DIR` | Where job logs go | `~/.local/state/launch_jupyter` |
 
 ## Troubleshooting
@@ -134,7 +147,10 @@ See [`config.example.sh`](config.example.sh). The most useful settings:
 
 Jupyter listens only on `127.0.0.1` on the compute node and keeps its default
 token authentication, so it is reachable only through your SSH tunnel with
-the token in the URL.
+the token in the URL. Other users on the same node can reach `127.0.0.1`, so
+the token matters: do not turn it off. The job makes its log file, which
+contains the token, readable only by you, even when it is written to a
+shared directory.
 
 ## Licence
 

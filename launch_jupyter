@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-LJ_VERSION="1.1.0"
+LJ_VERSION="1.2.0"
 PROG="launch_jupyter"
 
 die() {
@@ -50,6 +50,10 @@ Options:
   -M, --module NAME     Module to load if jupyter-lab is not already on PATH
                                                       (default: ${LJ_MODULE:-none})
   -w, --wait SECONDS    How long to wait for Jupyter to start (default: ${LJ_WAIT})
+  -i, --idle-timeout MIN
+                        Stop Jupyter (and end the job) after MIN minutes with
+                        no activity; 0 turns this off (default: ${LJ_IDLE_TIMEOUT})
+  -l, --list            Show your running sessions and how to connect to them
   -h, --help            Show this help
   -V, --version         Show the version
 
@@ -101,6 +105,12 @@ load_config() {
     : "${LJ_SSH_HOST_PATTERN:=}"
     : "${LJ_LOG_DIR:=${XDG_STATE_HOME:-$HOME/.local/state}/launch_jupyter}"
     : "${LJ_WAIT:=600}"
+    : "${LJ_IDLE_TIMEOUT:=0}"
+}
+
+# Path of a job's output file, as Slurm reports it.
+job_log_path() {
+    scontrol show job "$1" 2>/dev/null | grep -oE 'StdOut=[^ ]+' | head -n1 | cut -d= -f2- || true
 }
 
 # --------------------------------------------------------------------------
@@ -225,6 +235,15 @@ job_main() {
         load_config "$(job_script_dir)"
     fi
 
+    # The log will hold Jupyter's access token. Make it private to the user,
+    # since it may be in a shared directory (e.g. a plain sbatch from a
+    # project folder) and other users on the node can reach 127.0.0.1.
+    local log
+    log=$(job_log_path "${SLURM_JOB_ID:-}")
+    if [[ -n "${log}" && -f "${log}" ]]; then
+        chmod 600 "${log}" || die "could not make ${log} private; not starting"
+    fi
+
     if [[ "${LJ_MODE:-jupyter}" == vscode ]]; then
         vscode_job
         return
@@ -263,7 +282,23 @@ Stop the job when finished: scancel ${SLURM_JOB_ID}
 ================================================================
 EOF
 
-    exec jupyter-lab --no-browser --ip=127.0.0.1 --port="${port}"
+    local idle_args=()
+    if [[ "${LJ_IDLE_TIMEOUT:-0}" =~ ^[0-9]+$ ]] && (( LJ_IDLE_TIMEOUT > 0 )); then
+        local secs=$(( LJ_IDLE_TIMEOUT * 60 ))
+        echo "Idle shutdown: on, after ${LJ_IDLE_TIMEOUT} minutes with no activity."
+        # Cull idle kernels and terminals, then shut the server (and so the
+        # job) down once nothing is running and nobody is connected.
+        idle_args=(
+            --MappingKernelManager.cull_idle_timeout="${secs}"
+            --MappingKernelManager.cull_interval=300
+            --TerminalManager.cull_inactive_timeout="${secs}"
+            --TerminalManager.cull_interval=300
+            --ServerApp.shutdown_no_activity_timeout="${secs}"
+        )
+    fi
+
+    exec jupyter-lab --no-browser --ip=127.0.0.1 --port="${port}" \
+        ${idle_args[@]+"${idle_args[@]}"}
 }
 
 # --------------------------------------------------------------------------
@@ -275,6 +310,30 @@ find_url() {
     # token auth off). The job's own header deliberately contains no URL.
     grep -oE 'http://(127\.0\.0\.1|localhost):[0-9]+/lab(\?token=[0-9a-f]+)?' "$1" 2>/dev/null \
         | head -n1 | sed 's#http://127\.0\.0\.1:#http://localhost:#' || true
+}
+
+# Show the user's running sessions with their connection details.
+list_sessions() {
+    local found=0 jobid name state node left log url ssh_cmd
+    while IFS='|' read -r jobid name state node left; do
+        [[ "${name}" == jupyter || "${name}" == vscode ]] || continue
+        found=1
+        log=$(job_log_path "${jobid}")
+        echo "Job ${jobid} (${name}) ${state,,} on ${node:-?}, time left ${left}"
+        [[ -n "${log}" ]] && echo "  log: ${log}"
+        if [[ "${state}" != RUNNING ]]; then
+            :
+        elif [[ "${name}" == vscode ]]; then
+            echo "  VS Code: Remote-SSH: Connect to Host... and enter ${node}"
+        else
+            ssh_cmd=$(grep -E '^\s+ssh -J ' "${log}" 2>/dev/null | head -n1 | sed 's/^\s*//' || true)
+            url=$(find_url "${log}")
+            [[ -n "${ssh_cmd}" ]] && echo "  tunnel:  ${ssh_cmd}"
+            [[ -n "${url}" ]] && echo "  browser: ${url}"
+        fi
+        echo
+    done < <(squeue -h -u "$(id -un)" -o '%i|%j|%T|%N|%L' 2>/dev/null)
+    (( found )) || echo "No running jupyter or vscode sessions."
 }
 
 launcher_main() {
@@ -293,6 +352,8 @@ launcher_main() {
             -p | --partition) LJ_PARTITION="${2:?missing value for $1}"; shift 2 ;;
             -M | --module) LJ_MODULE="${2:?missing value for $1}"; shift 2 ;;
             -w | --wait) LJ_WAIT="${2:?missing value for $1}"; shift 2 ;;
+            -i | --idle-timeout) LJ_IDLE_TIMEOUT="${2:?missing value for $1}"; shift 2 ;;
+            -l | --list) list_sessions; exit 0 ;;
             -h | --help) usage; exit 0 ;;
             -V | --version) echo "${PROG} ${LJ_VERSION}"; exit 0 ;;
             --) shift; extra=("$@"); break ;;
@@ -309,7 +370,7 @@ launcher_main() {
 
     # Hand the resolved settings to the job.
     export LJ_FROM_LAUNCHER=1 LJ_SCRIPT_DIR="${script_dir}" LJ_MODE="${mode}"
-    export LJ_MODULE LJ_MODULEPATH LJ_LOGIN_HOST LJ_SSH_HOST_PATTERN
+    export LJ_MODULE LJ_MODULEPATH LJ_LOGIN_HOST LJ_SSH_HOST_PATTERN LJ_IDLE_TIMEOUT
 
     local submit jobid
     submit=$(sbatch --parsable --export=ALL \

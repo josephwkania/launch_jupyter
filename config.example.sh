@@ -33,6 +33,11 @@
 # Where launcher-mode job logs go. Default: ~/.local/state/launch_jupyter
 # LJ_LOG_DIR="$HOME/.local/state/launch_jupyter"
 
+# Stop Jupyter, which ends the job, after this many minutes with no activity
+# (idle kernels and terminals are culled first). 0 turns it off. Users can
+# override with -i/--idle-timeout. Not used in --vscode mode. Default: 0 (off)
+# LJ_IDLE_TIMEOUT=0
+
 # Seconds to wait for Jupyter to start before giving up waiting (the job is
 # left running). Default: 600
 # LJ_WAIT=600

@@ -1,0 +1,5 @@
+# Job logs
+*.log
+
+# Site configuration lives next to the installed script, not in the repo
+/config.sh

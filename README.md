@@ -53,6 +53,38 @@ sbatch -c 16 --mem=128G launch_jupyter      # override them as usual
 The tunnel command and URL are then written to `jupyter-<jobid>.log` in the
 directory you submitted from.
 
+## VS Code
+
+`launch_jupyter --vscode` holds a compute node for a VS Code
+[Remote-SSH](https://code.visualstudio.com/docs/remote/ssh) session instead of
+starting Jupyter. The resource options work the same way.
+
+```console
+$ launch_jupyter --vscode -c 4 -t 4:00:00
+Submitted job 12346: 4 CPUs, 64G, 4:00:00 on jupyter,main
+
+One-time setup: add this to ~/.ssh/config on your local machine:
+  Host node*
+      User me
+      ProxyJump me@login.example.org
+
+Then in VS Code: Remote-SSH: Connect to Host... and enter node042
+```
+
+After the one-time ssh setup, each session is just: run
+`launch_jupyter --vscode`, then connect VS Code to the node it prints.
+
+When the job ends (`scancel` or the time limit), the VS Code server on that
+node is stopped, so save your work first. This also closes any other VS Code
+window you have connected to the same node.
+
+**Note for admins:** without
+[`pam_slurm_adopt`](https://slurm.schedmd.com/pam_slurm_adopt.html), the SSH
+session is not part of the job, so the VS Code server is not limited to the
+job's CPUs and memory. Stopping it when the job ends is the script's best
+effort. With `pam_slurm_adopt` the session is adopted into the job and
+everything is enforced by Slurm; the script works the same either way.
+
 **Stopping.** Run `scancel <jobid>` when you are done. Pressing Ctrl-C while
 the launcher is still waiting asks whether to cancel the job.
 
@@ -82,6 +114,7 @@ See [`config.example.sh`](config.example.sh). The most useful settings:
 | `LJ_LOGIN_HOST` | Jump host in the printed `ssh -J` command | submit host |
 | `LJ_PARTITION` | Partition(s) | `jupyter,main` |
 | `LJ_CPUS`, `LJ_MEM`, `LJ_TIME` | Default resources | `8`, `64G`, `12:00:00` |
+| `LJ_SSH_HOST_PATTERN` | Host pattern in the printed `~/.ssh/config` (VS Code mode) | the node name |
 | `LJ_MODULEPATH`, `LJ_MODULE` | Module to load when `jupyter-lab` is not on `PATH` | none |
 | `LJ_LOG_DIR` | Where job logs go | `~/.local/state/launch_jupyter` |
 

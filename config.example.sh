@@ -11,6 +11,11 @@
 # printed tunnel command. Default: the host the job was submitted from.
 # LJ_LOGIN_HOST=login.example.org
 
+# --vscode mode: the Host pattern printed in the suggested ~/.ssh/config entry.
+# A pattern that matches all compute nodes (e.g. 'node*') means users only
+# set up ssh once. Default: the name of the node the job landed on.
+# LJ_SSH_HOST_PATTERN='node*'
+
 # Slurm partition(s), comma separated. Default: jupyter,main
 # LJ_PARTITION=jupyter,main
 

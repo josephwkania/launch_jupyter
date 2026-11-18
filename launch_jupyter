@@ -314,6 +314,7 @@ Environment: ${CONDA_PREFIX:-$(dirname "$(dirname "$(command -v jupyter-lab)")")
 
 1. On your local machine, open the tunnel (leave it running):
   ssh -J ${user}@${login} ${user}@${node} -L ${port}:127.0.0.1:${port} -N
+  Remove -N if you want a shell too.
 
 2. Open the URL with the token that Jupyter prints below, using localhost
    in place of 127.0.0.1 (port ${port}).
@@ -539,6 +540,7 @@ launcher_main() {
                 read -r ssh_cmd
                 echo "1. On your local machine, open the tunnel (leave it running):"
                 echo "   ${ssh_cmd}"
+                echo "   Remove -N if you want a shell too."
             }
             echo "2. Then open in your browser:"
             echo "   ${url}"

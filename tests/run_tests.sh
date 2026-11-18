@@ -150,6 +150,22 @@ expect "passes --time" "--time=1:00:00" "$args"
 expect "passes --partition" "--partition=testpart" "$args"
 expect "job name is jupyter" "--job-name=jupyter" "$args"
 
+echo "== launcher: bold only on a terminal"
+ESC=$'\033'
+if [[ "$out" != *"${ESC}"* ]]; then pass "piped output has no escape codes"
+else fail "piped output has escape codes" "$out"; fi
+if command -v script >/dev/null 2>&1; then
+    # script(1) runs the launcher on a pseudo-terminal.
+    out=$(script -qec "${SCRIPT}" /dev/null 2>&1)
+    expect "tunnel command is bold on a terminal" "${ESC}[1m   ssh -J me@login.example.org" "$out"
+    expect "URL is bold on a terminal" "${ESC}[1m   http://localhost:8888/lab?token=0123abcd${ESC}[0m" "$out"
+    out=$(NO_COLOR=1 script -qec "${SCRIPT}" /dev/null 2>&1)
+    if [[ "$out" == *"ssh -J"* && "$out" != *"${ESC}[1m"* ]]; then pass "NO_COLOR turns bold off"
+    else fail "NO_COLOR did not turn bold off" "$out"; fi
+else
+    echo "SKIP: script(1) not found; terminal bold not tested"
+fi
+
 echo "== launcher: extra sbatch options after --"
 out=$("${SCRIPT}" -- --account=proj 2>&1)
 expect "passes options after --" "--account=proj" "$(cat "${FAKE_STATE}/sbatch_args")"

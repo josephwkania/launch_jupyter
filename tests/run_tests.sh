@@ -201,11 +201,21 @@ expect "idle timeout culls kernels" "--MappingKernelManager.cull_idle_timeout=18
 echo "== job mode: VS Code cleanup stops only VS Code server processes"
 fakeserver_dir="${WORK}/home/.vscode-server/cli/servers/Stable-x/server"
 mkdir -p "${fakeserver_dir}"
-cp "$(command -v sleep)" "${fakeserver_dir}/node"
-"${fakeserver_dir}/node" 300 &
+# A stand-in VS Code server: a copy of sleep whose executable lives under
+# .vscode-server/. Run it as "sleep" (exec -a), because multi-call coreutils
+# builds (e.g. uutils on newer Ubuntu) choose the tool from argv[0].
+cp "$(readlink -f "$(command -v sleep)")" "${fakeserver_dir}/node"
+(exec -a sleep "${fakeserver_dir}/node" 300) &
 vs_pid=$!
 sleep 300 &
 other_pid=$!
+sleep 0.5
+if kill -0 "${vs_pid}" 2>/dev/null && [[ "$(readlink "/proc/${vs_pid}/exe")" == */.vscode-server/* ]]; then
+    pass "stand-in VS Code server is running"
+else
+    fail "stand-in VS Code server did not start, so the cleanup test would be meaningless" \
+        "exe: $(readlink "/proc/${vs_pid}/exe" 2>&1)"
+fi
 SLURM_JOB_ID=12345 LJ_FROM_LAUNCHER=1 LJ_MODE=vscode LJ_LOGIN_HOST=x FAKE_STDOUT="${JOBLOG}" \
     "${SCRIPT}" --job >"${WORK}/vscode_job.out" 2>&1 &
 job_pid=$!

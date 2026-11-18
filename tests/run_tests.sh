@@ -57,9 +57,14 @@ log="${out//%j/12345}"
 echo "12345;cluster"
 EOF
 
-# squeue: prints whatever the scenario sets in FAKE_SQUEUE.
+# squeue: the end-time query (-o %e) gets FAKE_END; anything else gets
+# whatever the scenario sets in FAKE_SQUEUE.
 cat >"${FAKE}/squeue" <<'EOF'
 #!/bin/bash
+if [[ " $* " == *" %e "* ]]; then
+    [[ -n "${FAKE_END:-}" ]] && echo "${FAKE_END}"
+    exit 0
+fi
 [[ -n "${FAKE_SQUEUE:-}" ]] && printf '%b\n' "${FAKE_SQUEUE}"
 exit 0
 EOF
@@ -106,20 +111,38 @@ check "--help exits 0" "$rc" -eq 0
 expect "--help shows usage" "Usage: launch_jupyter" "$out"
 expect "--help lists --vscode" "--vscode" "$out"
 
+# shellcheck disable=SC2088  # a literal ~ is what the help should show
+expect "--help shows the user config path, not a variable" "~/.config/launch_jupyter/config.sh" "$out"
+# shellcheck disable=SC2016  # looking for a literal ${ in the output
+if [[ "$out" != *'${'* ]]; then pass "--help has no unexpanded variables"
+else fail "--help shows a raw variable" "$out"; fi
+
 out=$("${SCRIPT}" -V 2>&1)
 expect "-V prints version" "launch_jupyter " "$out"
 
 out=$("${SCRIPT}" --no-such-option 2>&1); rc=$?
 check "unknown option exits non-zero" "$rc" -ne 0
-expect "unknown option is an error" "unknown option '--no-such-option'" "$out"
+expect "unknown option is an error" "unknown option '--no-such-option' (see launch_jupyter --help)" "$out"
+if [[ "$out" != *"Usage:"* ]]; then pass "unknown option does not dump the whole help"
+else fail "unknown option printed the full help" "$out"; fi
+
+out=$("${SCRIPT}" -c 2>&1); rc=$?
+check "missing value exits non-zero" "$rc" -ne 0
+expect "missing value is explained" "-c needs a value, e.g. -c 8" "$out"
+out=$("${SCRIPT}" -m -t 1:00:00 2>&1)
+expect "an option is not taken as a value" "-m needs a value, e.g. -m 32G" "$out"
+if [[ ! -e "${FAKE_STATE}/sbatch_args" ]]; then pass "bad options submit nothing"
+else fail "a job was submitted despite bad options" "$(cat "${FAKE_STATE}/sbatch_args")"; fi
 
 echo "== launcher: Jupyter"
 export FAKE_LOG_CONTENT="  ssh -J me@login.example.org me@node001 -L 8888:127.0.0.1:8888 -N\n[I ServerApp] http://127.0.0.1:8888/lab?token=0123abcd\n"
 export FAKE_SQUEUE="RUNNING|None"
-out=$("${SCRIPT}" -c 2 -m 4G -t 1:00:00 -p testpart 2>&1); rc=$?
+out=$(FAKE_END=2026-11-18T23:15:42 "${SCRIPT}" -c 2 -m 4G -t 1:00:00 -p testpart 2>&1); rc=$?
 check "launcher exits 0 when Jupyter is ready" "$rc" -eq 0
 expect "prints the tunnel command" "ssh -J me@login.example.org me@node001" "$out"
 expect "prints the localhost URL" "http://localhost:8888/lab?token=0123abcd" "$out"
+expect "prints when the session ends" "Session ends at 2026-11-18 23:15 (time limit)" "$out"
+expect "suggests --stop to finish" "launch_jupyter --stop 12345" "$out"
 args=$(cat "${FAKE_STATE}/sbatch_args")
 expect "passes --cpus-per-task" "--cpus-per-task=2" "$args"
 expect "passes --mem" "--mem=4G" "$args"
@@ -167,22 +190,61 @@ expect "job name is vscode" "--job-name=vscode" "$(cat "${FAKE_STATE}/sbatch_arg
 
 echo "== --list"
 printf '  ssh -J me@login me@node001 -L 9000:127.0.0.1:9000 -N\n[I ServerApp] http://127.0.0.1:9000/lab?token=feed\n' >"${LOG}"
-out=$(FAKE_SQUEUE="12345|jupyter|RUNNING|node001|1:00:00\n99|other|RUNNING|node002|2:00" \
+out=$(FAKE_SQUEUE="12345|jupyter|RUNNING|node001|1:00:00|2026-11-18T23:15:00\n99|other|RUNNING|node002|2:00|2026-11-19T01:00:00" \
     FAKE_STDOUT="${LOG}" "${SCRIPT}" --list 2>&1)
 expect "--list shows the session" "Job 12345 (jupyter) running on node001" "$out"
 expect "--list shows the URL" "http://localhost:9000/lab?token=feed" "$out"
+expect "--list shows the end time" "ends:    2026-11-18 23:15 (time limit)" "$out"
 if [[ "$out" != *"Job 99"* ]]; then pass "--list ignores other jobs"; else fail "--list showed an unrelated job" "$out"; fi
 out=$(FAKE_SQUEUE="" "${SCRIPT}" --list 2>&1)
 expect "--list with nothing running" "No running jupyter or vscode sessions" "$out"
+
+echo "== --stop"
+rm -f "${scancel_log}"
+out=$(FAKE_SQUEUE="12345|jupyter|RUNNING|node001|1:00:00|N/A\n99|other|RUNNING|node002|2:00|N/A" \
+    "${SCRIPT}" --stop 2>&1); rc=$?
+check "--stop with one session exits 0" "$rc" -eq 0
+expect "--stop cancels the only session" "Stopped job 12345 (jupyter)" "$out"
+check "--stop called scancel on that job only" "$(cat "${scancel_log}" 2>/dev/null)" = 12345
+
+rm -f "${scancel_log}"
+two="12345|jupyter|RUNNING|node001|1:00:00|N/A\n12346|vscode|PENDING||2:00|N/A"
+out=$(FAKE_SQUEUE="${two}" "${SCRIPT}" --stop 2>&1); rc=$?
+check "--stop with two sessions exits non-zero" "$rc" -ne 0
+expect "--stop lists the choices" "launch_jupyter --stop 12346" "$out"
+check "--stop with two sessions cancels nothing" ! -e "${scancel_log}"
+
+out=$(FAKE_SQUEUE="${two}" "${SCRIPT}" --stop 12346 2>&1)
+expect "--stop JOBID cancels that session" "Stopped job 12346 (vscode)" "$out"
+
+rm -f "${scancel_log}"
+out=$(FAKE_SQUEUE="${two}\n99|other|RUNNING|node002|2:00|N/A" "${SCRIPT}" --stop 99 2>&1); rc=$?
+check "--stop refuses a job that is not a session" "$rc" -ne 0
+expect "--stop explains the refusal" "job 99 is not one of your jupyter or vscode sessions" "$out"
+check "--stop did not cancel job 99" ! -e "${scancel_log}"
+
+out=$("${SCRIPT}" --stop abc 2>&1)
+expect "--stop rejects a non-numeric ID" "--stop takes a job ID (a number), not 'abc'" "$out"
+
+rm -f "${scancel_log}"
+out=$(FAKE_SQUEUE="${two}" "${SCRIPT}" --stop-all 2>&1)
+expect "--stop-all stops the first" "Stopped job 12345 (jupyter)" "$out"
+expect "--stop-all stops the second" "Stopped job 12346 (vscode)" "$out"
+check "--stop-all called scancel twice" "$(wc -l <"${scancel_log}")" -eq 2
+
+out=$(FAKE_SQUEUE="" "${SCRIPT}" --stop 2>&1); rc=$?
+check "--stop with nothing running exits 0" "$rc" -eq 0
+expect "--stop with nothing running says so" "No running jupyter or vscode sessions" "$out"
 
 echo "== job mode: Jupyter"
 JOBLOG="${WORK}/job.log"
 : >"${JOBLOG}"; chmod 644 "${JOBLOG}"
 out=$(SLURM_JOB_ID=12345 LJ_FROM_LAUNCHER=1 LJ_MODULE='' LJ_MODULEPATH='' \
     LJ_LOGIN_HOST=login.example.org LJ_IDLE_TIMEOUT=0 FAKE_STDOUT="${JOBLOG}" \
-    "${SCRIPT}" --job 2>&1); rc=$?
+    FAKE_END=2026-11-18T23:15:00 "${SCRIPT}" --job 2>&1); rc=$?
 check "job mode runs jupyter-lab" "$rc" -eq 0
 expect "job header has the ssh tunnel" "ssh -J ${USER:-$(id -un)}@login.example.org" "$out"
+expect "job header has the end time" "Session ends at 2026-11-18 23:15" "$out"
 jargs=$(cat "${FAKE_STATE}/jupyter_args")
 expect "jupyter binds to 127.0.0.1 only" "--ip=127.0.0.1" "$jargs"
 expect "jupyter does not open a browser" "--no-browser" "$jargs"

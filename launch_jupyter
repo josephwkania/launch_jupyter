@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-LJ_VERSION="1.2.0"
+LJ_VERSION="1.3.0"
 PROG="launch_jupyter"
 
 die() {
@@ -54,7 +54,9 @@ Options:
                         Stop Jupyter (and end the job) after MIN minutes with
                         no activity; 0 turns this off (default: ${LJ_IDLE_TIMEOUT})
   -l, --list            Show your running sessions and how to connect to them
-  -h, --help            Show this help
+  -s, --stop [JOBID]    Stop a session (the only one, if JOBID is left out)
+      --stop-all        Stop all your jupyter and vscode sessions
+  -h, --help           Show this help
   -V, --version         Show the version
 
 Anything after '--' is passed to sbatch unchanged, e.g. -- --account=myproj
@@ -69,9 +71,24 @@ jupyter-<jobid>.log in the submit directory.
 In --vscode mode, VS Code server processes on the node are stopped when the
 job ends, so save your work before the time limit.
 
-Site defaults are read from config.sh next to the script, then from
-\${LAUNCH_JUPYTER_CONFIG:-~/.config/launch_jupyter/config.sh}.
+Settings are read from $(tilde "${LJ_SCRIPT_HOME:-<script dir>}/config.sh") (site defaults),
+then $(tilde "$(user_config_path)") (yours, if it exists).
+Options override both.
 EOF
+}
+
+# Show a path with $HOME written as ~.
+tilde() {
+    local path="$1"
+    if [[ -n "${HOME:-}" && "${path}" == "${HOME}"/* ]]; then
+        echo "~${path#"${HOME}"}"
+    else
+        echo "${path}"
+    fi
+}
+
+user_config_path() {
+    echo "${LAUNCH_JUPYTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/launch_jupyter/config.sh}"
 }
 
 # --------------------------------------------------------------------------
@@ -82,7 +99,8 @@ EOF
 # fill in anything still unset with built-in defaults.
 load_config() {
     local script_dir="$1"
-    local user_config="${LAUNCH_JUPYTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/launch_jupyter/config.sh}"
+    local user_config
+    user_config=$(user_config_path)
 
     if [[ -n "${script_dir}" && -r "${script_dir}/config.sh" ]]; then
         # shellcheck source=/dev/null
@@ -111,6 +129,25 @@ load_config() {
 # Path of a job's output file, as Slurm reports it.
 job_log_path() {
     scontrol show job "$1" 2>/dev/null | grep -oE 'StdOut=[^ ]+' | head -n1 | cut -d= -f2- || true
+}
+
+# When a job will hit its time limit, as "YYYY-MM-DD HH:MM", or nothing if
+# Slurm does not know yet (e.g. still pending).
+job_end_time() {
+    local end
+    end=$(squeue -h -j "$1" -o '%e' 2>/dev/null | head -n1) || true
+    [[ "${end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2} ]] || return 0
+    end="${end/T/ }"
+    echo "${end:0:16}"
+}
+
+# "Session ends at ... (time limit)", or nothing if the end is not known.
+end_line() {
+    local end
+    end=$(job_end_time "$1")
+    if [[ -n "${end}" ]]; then
+        echo "Session ends at ${end} (time limit); save your work before then."
+    fi
 }
 
 # --------------------------------------------------------------------------
@@ -213,6 +250,7 @@ Then in VS Code: Remote-SSH: Connect to Host... and enter ${node}
 
 When this job ends (scancel ${SLURM_JOB_ID} or the time limit), VS Code
 server processes on ${node} are stopped, so save your work first.
+$(end_line "${SLURM_JOB_ID}")
 ========================================================================
 VS Code session ready on ${node}
 EOF
@@ -280,6 +318,7 @@ Environment: ${CONDA_PREFIX:-$(dirname "$(dirname "$(command -v jupyter-lab)")")
 2. Open the URL with the token that Jupyter prints below, using localhost
    in place of 127.0.0.1 (port ${port}).
 
+$(end_line "${SLURM_JOB_ID}")
 Stop the job when finished: scancel ${SLURM_JOB_ID}
 ================================================================
 EOF
@@ -314,14 +353,64 @@ find_url() {
         | head -n1 | sed 's#http://127\.0\.0\.1:#http://localhost:#' || true
 }
 
+# The user's jupyter and vscode jobs, one "jobid|name|state|node|left|end"
+# line each.
+my_sessions() {
+    squeue -h -u "$(id -un)" -o '%i|%j|%T|%N|%L|%e' 2>/dev/null \
+        | awk -F'|' '$2 == "jupyter" || $2 == "vscode"' || true
+}
+
+# Cancel one session (by job ID, or the only one), or all of them.
+stop_sessions() {
+    local target="$1" sessions count jobid name
+    sessions=$(my_sessions)
+    count=$(grep -c . <<<"${sessions}" || true)
+
+    if [[ "${target}" == all ]]; then
+        if (( count == 0 )); then
+            echo "No running jupyter or vscode sessions."
+            return 0
+        fi
+        while IFS='|' read -r jobid name _; do
+            scancel "${jobid}" && echo "Stopped job ${jobid} (${name})."
+        done <<<"${sessions}"
+        return 0
+    fi
+
+    if [[ -z "${target}" ]]; then
+        case "${count}" in
+            0) echo "No running jupyter or vscode sessions."; return 0 ;;
+            1) target="${sessions%%|*}" ;;
+            *)
+                echo "You have ${count} sessions; say which one to stop:" >&2
+                while IFS='|' read -r jobid name _; do
+                    echo "  ${PROG} --stop ${jobid}    (${name})" >&2
+                done <<<"${sessions}"
+                echo "or stop them all with: ${PROG} --stop-all" >&2
+                return 1
+                ;;
+        esac
+    fi
+
+    # Only cancel the user's own launch_jupyter sessions.
+    name=$(awk -F'|' -v id="${target}" '$1 == id {print $2}' <<<"${sessions}")
+    [[ -n "${name}" ]] \
+        || die "job ${target} is not one of your jupyter or vscode sessions (see ${PROG} --list)"
+    scancel "${target}" && echo "Stopped job ${target} (${name})."
+}
+
 # Show the user's running sessions with their connection details.
 list_sessions() {
-    local found=0 jobid name state node left log url ssh_cmd
-    while IFS='|' read -r jobid name state node left; do
-        [[ "${name}" == jupyter || "${name}" == vscode ]] || continue
+    local found=0 jobid name state node left end log url ssh_cmd
+    while IFS='|' read -r jobid name state node left end; do
+        [[ -n "${jobid}" ]] || continue
         found=1
         log=$(job_log_path "${jobid}")
         echo "Job ${jobid} (${name}) ${state,,} on ${node:-?}, time left ${left}"
+        if [[ "${end:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+            end="${end/T/ }"
+            echo "  ends:    ${end:0:16} (time limit)"
+        fi
         [[ -n "${log}" ]] && echo "  log: ${log}"
         if [[ "${state}" != RUNNING ]]; then
             :
@@ -334,32 +423,63 @@ list_sessions() {
             [[ -n "${url}" ]] && echo "  browser: ${url}"
         fi
         echo
-    done < <(squeue -h -u "$(id -un)" -o '%i|%j|%T|%N|%L' 2>/dev/null)
+    done < <(my_sessions)
     (( found )) || echo "No running jupyter or vscode sessions."
+}
+
+# Check that option $1 was given a value ($2), and say how if not.
+need_value() {
+    local example
+    case "$1" in
+        -c | --cpus) example=8 ;;
+        -m | --mem) example=32G ;;
+        -t | --time) example=4:00:00 ;;
+        -p | --partition) example=main ;;
+        -M | --module) example=python/jupyter ;;
+        -w | --wait) example=600 ;;
+        -i | --idle-timeout) example=60 ;;
+        *) example=VALUE ;;
+    esac
+    if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        die "$1 needs a value, e.g. $1 ${example}"
+    fi
 }
 
 launcher_main() {
     local script_path script_dir
     script_path=$(readlink -f "${BASH_SOURCE[0]}")
     script_dir=$(dirname "${script_path}")
+    LJ_SCRIPT_HOME="${script_dir}"   # shown in --help
     load_config "${script_dir}"
 
     local extra=() mode=jupyter
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --vscode) mode=vscode; shift ;;
-            -c | --cpus) LJ_CPUS="${2:?missing value for $1}"; shift 2 ;;
-            -m | --mem) LJ_MEM="${2:?missing value for $1}"; shift 2 ;;
-            -t | --time) LJ_TIME="${2:?missing value for $1}"; shift 2 ;;
-            -p | --partition) LJ_PARTITION="${2:?missing value for $1}"; shift 2 ;;
-            -M | --module) LJ_MODULE="${2:?missing value for $1}"; shift 2 ;;
-            -w | --wait) LJ_WAIT="${2:?missing value for $1}"; shift 2 ;;
-            -i | --idle-timeout) LJ_IDLE_TIMEOUT="${2:?missing value for $1}"; shift 2 ;;
+            -c | --cpus) need_value "$@"; LJ_CPUS="$2"; shift 2 ;;
+            -m | --mem) need_value "$@"; LJ_MEM="$2"; shift 2 ;;
+            -t | --time) need_value "$@"; LJ_TIME="$2"; shift 2 ;;
+            -p | --partition) need_value "$@"; LJ_PARTITION="$2"; shift 2 ;;
+            -M | --module) need_value "$@"; LJ_MODULE="$2"; shift 2 ;;
+            -w | --wait) need_value "$@"; LJ_WAIT="$2"; shift 2 ;;
+            -i | --idle-timeout) need_value "$@"; LJ_IDLE_TIMEOUT="$2"; shift 2 ;;
             -l | --list) list_sessions; exit 0 ;;
+            -s | --stop)
+                if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+                    stop_sessions "$2"
+                elif [[ -n "${2:-}" && "$2" != -* ]]; then
+                    die "--stop takes a job ID (a number), not '$2'"
+                else
+                    stop_sessions ""
+                fi
+                exit $?
+                ;;
+            --stop-all) stop_sessions all; exit $? ;;
             -h | --help) usage; exit 0 ;;
             -V | --version) echo "${PROG} ${LJ_VERSION}"; exit 0 ;;
             --) shift; extra=("$@"); break ;;
-            *) usage >&2; echo >&2; die "unknown option '$1'" ;;
+            -*) die "unknown option '$1' (see ${PROG} --help)" ;;
+            *) die "unexpected argument '$1' (see ${PROG} --help)" ;;
         esac
     done
 
@@ -407,7 +527,8 @@ launcher_main() {
             echo "Then in VS Code: Remote-SSH: Connect to Host... and enter ${node}"
             echo
             echo "VS Code on ${node} is stopped when the job ends, so save your work first."
-            echo "Stop the job when finished: scancel ${jobid}"
+            end_line "${jobid}"
+            echo "Stop the job when finished: ${PROG} --stop ${jobid}"
             return 0
         fi
 
@@ -422,7 +543,8 @@ launcher_main() {
             echo "2. Then open in your browser:"
             echo "   ${url}"
             echo
-            echo "Stop the job when finished: scancel ${jobid}"
+            end_line "${jobid}"
+            echo "Stop the job when finished: ${PROG} --stop ${jobid}"
             return 0
         fi
 
@@ -442,7 +564,7 @@ launcher_main() {
             echo
             echo "Not ready after ${LJ_WAIT}s; the job is still ${state,,}."
             echo "The connection details will appear in ${log}"
-            echo "Cancel with: scancel ${jobid}"
+            echo "Cancel with: ${PROG} --stop ${jobid}"
             return 0
         fi
         sleep 3

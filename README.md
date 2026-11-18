@@ -14,6 +14,9 @@ Waiting in queue (reason: Resources)...
    ssh -J me@login.example.org me@node042 -L 8731:127.0.0.1:8731 -N
 2. Then open in your browser:
    http://localhost:8731/lab?token=3f9c...
+
+Session ends at 2026-11-18 23:15 (time limit); save your work before then.
+Stop the job when finished: launch_jupyter --stop 12345
 ```
 
 ## Usage
@@ -28,6 +31,8 @@ launch_jupyter [options] [-- extra sbatch options]
   -M, --module NAME     Module to load if jupyter-lab is not on PATH
   -i, --idle-timeout M  Stop after M idle minutes  (default 0 = off)
   -l, --list            Show running sessions and how to connect
+  -s, --stop [JOBID]    Stop a session (the only one, if no JOBID)
+      --stop-all        Stop all your sessions
       --vscode          Hold a node for VS Code Remote-SSH instead
   -w, --wait SECONDS    How long to wait for startup (default 600)
 ```
@@ -36,8 +41,34 @@ launch_jupyter [options] [-- extra sbatch options]
   env), the job uses it; otherwise it loads the configured or `-M` module.
 - **As a batch script:** `sbatch launch_jupyter` also works; the connection
   details go to `jupyter-<jobid>.log` in the submit directory.
-- **Stopping:** `scancel <jobid>`. Ctrl-C while waiting offers to cancel.
+- **Stopping:** `launch_jupyter --stop` (or `scancel <jobid>`). Ctrl-C while
+  waiting offers to cancel. The session's end time (its time limit) is printed
+  when it starts and by `--list`.
 - **Lost the URL?** `launch_jupyter --list`.
+
+## Using your own environment
+
+**Run Jupyter from your env:** activate it first. If it has `jupyter-lab`, the
+job uses it:
+
+```bash
+conda activate myenv          # needs jupyterlab installed in it
+launch_jupyter
+```
+
+**Or add your env as a kernel**, to keep the site's Jupyter and pick your env
+from the kernel list (once per env):
+
+```bash
+conda activate myenv
+conda install ipykernel       # or: pip install ipykernel
+python -m ipykernel install --user --name myenv --display-name "Python (myenv)"
+```
+
+It appears in the Launcher and under *Kernel → Change Kernel* the next time
+you start Jupyter. `jupyter kernelspec list` shows your kernels and
+`jupyter kernelspec uninstall myenv` removes one. Kernels live in
+`~/.local/share/jupyter/kernels/`, so they are available on every node.
 
 ## VS Code
 

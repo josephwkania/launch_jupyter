@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: |
+          bash -n launch_jupyter
+          bash -n tests/run_tests.sh
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck launch_jupyter config.example.sh tests/run_tests.sh
+
+  test:
+    name: tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            container: ""
+          # Same OS family as typical HPC login nodes (RHEL 9 / Rocky 9).
+          - name: rocky9
+            container: rockylinux:9
+    container: ${{ matrix.container }}
+    steps:
+      - name: Install tools (Rocky)
+        if: matrix.container == 'rockylinux:9'
+        run: dnf install -y --allowerasing --setopt=install_weak_deps=False procps-ng iproute coreutils findutils which
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: bash tests/run_tests.sh

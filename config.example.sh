@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # launch_jupyter configuration
 #
 # Copy this file to one of:

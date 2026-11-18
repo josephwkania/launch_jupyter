@@ -1,5 +1,7 @@
 # launch_jupyter
 
+[![CI](https://github.com/josephwkania/launch_jupyter/actions/workflows/ci.yml/badge.svg)](https://github.com/josephwkania/launch_jupyter/actions/workflows/ci.yml)
+
 Start JupyterLab on a Slurm compute node and get the SSH tunnel command and
 URL to open it from your laptop, all in one step.
 
@@ -151,6 +153,19 @@ the token in the URL. Other users on the same node can reach `127.0.0.1`, so
 the token matters: do not turn it off. The job makes its log file, which
 contains the token, readable only by you, even when it is written to a
 shared directory.
+
+## Development
+
+Tests need no Slurm cluster: fake `sbatch`, `squeue`, `scontrol` and
+`jupyter-lab` commands stand in for the real ones.
+
+```bash
+bash tests/run_tests.sh        # launcher, --vscode, --list, job mode, idle timeout, cleanup
+shellcheck launch_jupyter config.example.sh tests/run_tests.sh
+```
+
+GitHub Actions runs both on every push and pull request, on Ubuntu and
+Rocky Linux 9.
 
 ## Licence
 

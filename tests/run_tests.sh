@@ -208,6 +208,7 @@ mkdir -p "${fakeserver_dir}"
 fifo="${WORK}/fake-server.fifo"
 mkfifo "${fifo}"
 cp "$(readlink -f "$(command -v bash)")" "${fakeserver_dir}/node"
+# shellcheck disable=SC2016  # $1 is expanded by the stand-in bash, not here
 "${fakeserver_dir}/node" -c 'read -r -t 300 _ <>"$1"' fake-server "${fifo}" &
 vs_pid=$!
 sleep 300 &

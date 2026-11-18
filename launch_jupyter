@@ -33,14 +33,18 @@ die() {
     exit 1
 }
 
-# Print $* in bold when stdout is a terminal (and NO_COLOR is not set), so
-# the lines to copy stand out; logs and pipes get plain text.
+# Bold when stdout is a terminal (and NO_COLOR is not set), so the lines to
+# copy stand out; logs and pipes get plain text. Decided once here, because
+# inside $(...) stdout is never a terminal.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    B=$'\033[1m' N=$'\033[0m'
+else
+    B="" N=""
+fi
+
+# Print $* as a bold line.
 bold() {
-    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-        printf '\033[1m%s\033[0m\n' "$*"
-    else
-        printf '%s\n' "$*"
-    fi
+    printf '%s%s%s\n' "${B}" "$*" "${N}"
 }
 
 usage() {
@@ -156,8 +160,26 @@ end_line() {
     local end
     end=$(job_end_time "$1")
     if [[ -n "${end}" ]]; then
-        echo "Session ends at ${end} (time limit); save your work before then."
+        echo "Session ends at ${B}${end}${N} (time limit); save your work before then."
     fi
+}
+
+# Slurm's time left (%L: [days-]hours:minutes:seconds, or minutes:seconds)
+# in whole minutes, or nothing if it is not a time (e.g. UNLIMITED).
+minutes_left() {
+    local left="$1" days=0 h=0 m=0 s=0
+    if [[ "${left}" =~ ^([0-9]+)-(.*)$ ]]; then
+        days=${BASH_REMATCH[1]}
+        left=${BASH_REMATCH[2]}
+    fi
+    if [[ "${left}" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+        h=${BASH_REMATCH[1]} m=${BASH_REMATCH[2]} s=${BASH_REMATCH[3]}
+    elif [[ "${left}" =~ ^([0-9]+):([0-9]+)$ ]]; then
+        m=${BASH_REMATCH[1]} s=${BASH_REMATCH[2]}
+    else
+        return 0
+    fi
+    echo $(( (10#${days} * 86400 + 10#${h} * 3600 + 10#${m} * 60 + 10#${s}) / 60 ))
 }
 
 # --------------------------------------------------------------------------
@@ -412,7 +434,7 @@ stop_sessions() {
 
 # Show the user's running sessions with their connection details.
 list_sessions() {
-    local found=0 jobid name state node left end log url ssh_cmd
+    local found=0 jobid name state node left end log url ssh_cmd mins
     while IFS='|' read -r jobid name state node left end; do
         [[ -n "${jobid}" ]] || continue
         found=1
@@ -420,7 +442,12 @@ list_sessions() {
         echo "Job ${jobid} (${name}) ${state,,} on ${node:-?}, time left ${left}"
         if [[ "${end:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
             end="${end/T/ }"
-            echo "  ends:    ${end:0:16} (time limit)"
+            mins=$(minutes_left "${left}")
+            if [[ "${state}" == RUNNING && -n "${mins}" ]] && (( mins < 60 )); then
+                echo "  ends:    ${B}${end:0:16} (time limit, in ${mins} min)${N}; save your work"
+            else
+                echo "  ends:    ${end:0:16} (time limit)"
+            fi
         fi
         [[ -n "${log}" ]] && echo "  log: ${log}"
         if [[ "${state}" != RUNNING ]]; then

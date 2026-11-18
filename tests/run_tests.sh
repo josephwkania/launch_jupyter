@@ -159,6 +159,8 @@ if command -v script >/dev/null 2>&1; then
     out=$(script -qec "${SCRIPT}" /dev/null 2>&1)
     expect "tunnel command is bold on a terminal" "${ESC}[1m   ssh -J me@login.example.org" "$out"
     expect "URL is bold on a terminal" "${ESC}[1m   http://localhost:8888/lab?token=0123abcd${ESC}[0m" "$out"
+    out=$(FAKE_END=2026-11-18T23:15:42 script -qec "${SCRIPT}" /dev/null 2>&1)
+    expect "end time is bold on a terminal" "Session ends at ${ESC}[1m2026-11-18 23:15${ESC}[0m (time limit)" "$out"
     out=$(NO_COLOR=1 script -qec "${SCRIPT}" /dev/null 2>&1)
     if [[ "$out" == *"ssh -J"* && "$out" != *"${ESC}[1m"* ]]; then pass "NO_COLOR turns bold off"
     else fail "NO_COLOR did not turn bold off" "$out"; fi
@@ -212,6 +214,15 @@ expect "--list shows the session" "Job 12345 (jupyter) running on node001" "$out
 expect "--list shows the URL" "http://localhost:9000/lab?token=feed" "$out"
 expect "--list shows the end time" "ends:    2026-11-18 23:15 (time limit)" "$out"
 if [[ "$out" != *"Job 99"* ]]; then pass "--list ignores other jobs"; else fail "--list showed an unrelated job" "$out"; fi
+if [[ "$out" != *" min)"* ]]; then pass "--list gives no warning with an hour left"
+else fail "--list warned with an hour left" "$out"; fi
+out=$(FAKE_SQUEUE="12345|jupyter|RUNNING|node001|42:10|2026-11-18T23:15:00" \
+    FAKE_STDOUT="${LOG}" "${SCRIPT}" --list 2>&1)
+expect "--list warns when under an hour is left" "ends:    2026-11-18 23:15 (time limit, in 42 min); save your work" "$out"
+out=$(FAKE_SQUEUE="12345|jupyter|RUNNING|node001|1-00:30:00|2026-11-19T23:15:00" \
+    FAKE_STDOUT="${LOG}" "${SCRIPT}" --list 2>&1)
+if [[ "$out" != *" min)"* ]]; then pass "--list reads days in the time left"
+else fail "--list misread a time left with days" "$out"; fi
 out=$(FAKE_SQUEUE="" "${SCRIPT}" --list 2>&1)
 expect "--list with nothing running" "No running jupyter or vscode sessions" "$out"
 

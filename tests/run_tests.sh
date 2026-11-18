@@ -201,11 +201,14 @@ expect "idle timeout culls kernels" "--MappingKernelManager.cull_idle_timeout=18
 echo "== job mode: VS Code cleanup stops only VS Code server processes"
 fakeserver_dir="${WORK}/home/.vscode-server/cli/servers/Stable-x/server"
 mkdir -p "${fakeserver_dir}"
-# A stand-in VS Code server: a copy of sleep whose executable lives under
-# .vscode-server/. Run it as "sleep" (exec -a), because multi-call coreutils
-# builds (e.g. uutils on newer Ubuntu) choose the tool from argv[0].
-cp "$(readlink -f "$(command -v sleep)")" "${fakeserver_dir}/node"
-(exec -a sleep "${fakeserver_dir}/node" 300) &
+# A stand-in VS Code server: a copy of bash whose executable lives under
+# .vscode-server/, blocking on a FIFO with the read builtin (no child
+# process). Not a copy of sleep: multi-call coreutils builds (e.g. uutils
+# on newer Ubuntu) pick the tool from the file name and refuse "node".
+fifo="${WORK}/fake-server.fifo"
+mkfifo "${fifo}"
+cp "$(readlink -f "$(command -v bash)")" "${fakeserver_dir}/node"
+"${fakeserver_dir}/node" -c 'read -r -t 300 _ <>"$1"' fake-server "${fifo}" &
 vs_pid=$!
 sleep 300 &
 other_pid=$!

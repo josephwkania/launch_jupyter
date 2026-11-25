@@ -73,18 +73,33 @@ you start Jupyter. `jupyter kernelspec list` shows your kernels and
 ## VS Code
 
 `launch_jupyter --vscode` holds a node and prints a one-time
-`~/.ssh/config` entry and the node to connect to with
+`~/.ssh/config` entry, two VS Code settings and the node to connect to with
 [Remote-SSH](https://code.visualstudio.com/docs/remote/ssh):
 
 ```console
 $ launch_jupyter --vscode -t 4:00:00
-One-time setup: add this to ~/.ssh/config on your local machine:
+One-time setup on your local machine. Add this to ~/.ssh/config:
   Host node*
       User me
       ProxyJump me@login.example.org
+      StrictHostKeyChecking accept-new
+and these to your VS Code settings.json:
+  "remote.SSH.maxReconnectionAttempts": 2,
+  "remote.SSH.useFlock": false
 
 Then in VS Code: Remote-SSH: Connect to Host... and enter node042
 ```
+
+- `StrictHostKeyChecking accept-new` skips the host-key prompt the first time
+  you reach each node, but still refuses a node whose key has changed.
+- `maxReconnectionAttempts` makes VS Code give up soon after the job ends,
+  instead of retrying.
+- `useFlock: false`: VS Code locks files in its server directory, which can
+  fail when home is on a network filesystem (NFS) as compute nodes see it.
+
+The VS Code server installs into `~/.vscode-server` (a few hundred MB per VS
+Code version); if your home directory is over quota, connecting fails.
+Delete old versions under `~/.vscode-server/cli/servers/` to free space.
 
 When the job ends, your VS Code server on that node is stopped, so save
 first. Without
@@ -116,6 +131,8 @@ user's environment or a module, and `shuf` (and optionally `ss`) on nodes.
   resources.
 - **Browser can't connect:** keep the `ssh` tunnel running, and check the
   port matches the URL.
+- **ssh refuses a node ("REMOTE HOST IDENTIFICATION HAS CHANGED"):** the
+  node was probably reinstalled. Run `ssh-keygen -R <node>` and reconnect.
 
 ## Security
 

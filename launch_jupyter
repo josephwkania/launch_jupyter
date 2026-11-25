@@ -238,10 +238,14 @@ print_ssh_config() {
     local user="$1" login="$2" node="$3"
     local pattern="${LJ_SSH_HOST_PATTERN:-${node}}"
     cat <<EOF
-One-time setup: add this to ~/.ssh/config on your local machine:
+One-time setup on your local machine. Add this to ~/.ssh/config:
   Host ${pattern}
       User ${user}
       ProxyJump ${user}@${login}
+      StrictHostKeyChecking accept-new
+and these to your VS Code settings.json:
+  "remote.SSH.maxReconnectionAttempts": 2,
+  "remote.SSH.useFlock": false
 EOF
 }
 

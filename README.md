@@ -83,6 +83,8 @@ One-time setup on your local machine. Add this to ~/.ssh/config:
       User me
       ProxyJump me@login.example.org
       StrictHostKeyChecking accept-new
+      ServerAliveInterval 60
+      ServerAliveCountMax 3
 and these to your VS Code settings.json:
   "remote.SSH.maxReconnectionAttempts": 2,
   "remote.SSH.useFlock": false
@@ -92,6 +94,8 @@ Then in VS Code: Remote-SSH: Connect to Host... and enter node042
 
 - `StrictHostKeyChecking accept-new` skips the host-key prompt the first time
   you reach each node, but still refuses a node whose key has changed.
+- `ServerAlive*` sends a keepalive after 60 s of quiet, so firewalls don't
+  drop an idle connection, and closes it after 3 missed replies.
 - `maxReconnectionAttempts` makes VS Code give up soon after the job ends,
   instead of retrying.
 - `useFlock: false`: VS Code locks files in its server directory, which can
